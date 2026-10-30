@@ -1,0 +1,10 @@
+*.db
+*.sqlite
+*.backup
+*.backup*
+*.before-*
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Join PickEarn</title>
+
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+}
+
+body {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 25px 15px;
+    background: #050b08;
+    color: white;
+}
+
+.container {
+    width: 100%;
+    max-width: 410px;
+    padding: 30px 24px;
+    background: #0b1510;
+    border: 1px solid #174c30;
+    border-radius: 22px;
+    box-shadow: 0 0 25px rgba(0, 255, 100, 0.12);
+}
+
+.logo {
+    text-align: center;
+    font-size: 34px;
+    font-weight: 900;
+    color: #28ff83;
+    text-shadow: 0 0 15px rgba(40, 255, 131, 0.65);
+    margin-bottom: 8px;
+}
+
+.tagline {
+    text-align: center;
+    color: #9aa99e;
+    font-size: 13px;
+    margin-bottom: 28px;
+}
+
+h2 {
+    font-size: 24px;
+    margin-bottom: 8px;
+}
+
+.subtitle {
+    font-size: 13px;
+    color: #a0aea4;
+    margin-bottom: 24px;
+    line-height: 1.6;
+}
+
+label {
+    display: block;
+    font-size: 13px;
+    color: #d8e5dc;
+    margin-bottom: 8px;
+}
+
+input {
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 18px;
+    background: #07100b;
+    color: white;
+    border: 1px solid #244532;
+    border-radius: 10px;
+    outline: none;
+    font-size: 14px;
+}
+
+input:focus {
+    border-color: #28ff83;
+    box-shadow: 0 0 10px rgba(40, 255, 131, 0.12);
+}
+
+button {
+    width: 100%;
+    padding: 15px;
+    border: none;
+    border-radius: 10px;
+    background: #28ff83;
+    color: #031109;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.25s;
+}
+
+button:hover {
+    box-shadow: 0 0 20px rgba(40, 255, 131, 0.4);
+    transform: translateY(-1px);
+}
+
+.login {
+    text-align: center;
+    margin-top: 22px;
+    color: #a0aea4;
+    font-size: 13px;
+}
+
+a {
+    color: #28ff83;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+.message {
+    display: none;
+    padding: 12px;
+    margin-bottom: 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.message.error {
+    display: block;
+    background: #321416;
+    color: #ffb6b6;
+}
+
+.message.success {
+    display: block;
+    background: #102d1b;
+    color: #70ffab;
+}
+
+.terms {
+    font-size: 11px;
+    color: #718077;
+    text-align: center;
+    margin-top: 18px;
+    line-height: 1.6;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="logo">PickEarn<span style="color:white">.</span></div>
+
+    <p class="tagline">Pick tasks. Earn rewards.</p>
+
+    <h2>Create Account</h2>
+
+    <p class="subtitle">
+        Join PickEarn and get ready to explore earning opportunities.
+    </p>
+
+    <div id="message" class="message" role="alert"></div>
+
+    <form id="registerForm">
+
+        <label for="fullname">Full Name</label>
+        <input
+            type="text"
+            id="fullname"
+            placeholder="Enter your full name"
+            autocomplete="name"
+            required
+        >
+
+        <label for="email">Email Address</label>
+        <input
+            type="email"
+            id="email"
+            placeholder="you@example.com"
+            autocomplete="email"
+            required
+        >
+
+        <label for="username">Username</label>
+        <input
+            type="text"
+            id="username"
+            placeholder="Choose a username"
+            autocomplete="username"
+            minlength="3"
+            required
+        >
+
+        <label for="password">Password</label>
+        <input
+            type="password"
+            id="password"
+            placeholder="Create a password"
+            autocomplete="new-password"
+            minlength="8"
+            required
+        >
+
+        <label for="confirmPassword">Confirm Password</label>
+        <input
+            type="password"
+            id="confirmPassword"
+            placeholder="Enter password again"
+            autocomplete="new-password"
+            minlength="8"
+            required
+        >
+
+        <button type="submit">CREATE ACCOUNT →</button>
+
+    </form>
+
+    <p class="login">
+        Already have an account?
+        <a href="login.html">Log in</a>
+    </p>
+
+    <p class="terms">
+        By registering, you agree to our terms and privacy policy.
+    </p>
+
+</div>
+
+<script>
+const form = document.getElementById("registerForm");
+const message = document.getElementById("message");
+
+form.addEventListener("submit", function(event) {
+    event.preventDefault();
+
+    const fullname = document.getElementById("fullname").value.trim();
+    const email = document.getElementById("email").value.trim();
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    const confirmPassword = document.getElementById("confirmPassword").value;
+
+    message.className = "message";
+
+    if (!fullname || !email || !username || !password || !confirmPassword) {
+        message.textContent = "Please fill in every field.";
+        message.className = "message error";
+        return;
+    }
+
+    if (username.length < 3) {
+        message.textContent = "Your username must contain at least 3 characters.";
+        message.className = "message error";
+        return;
+    }
+
+    if (password.length < 8) {
+        message.textContent = "Your password must contain at least 8 characters.";
+        message.className = "message error";
+        return;
+    }
+
+    if (password !== confirmPassword) {
+        message.textContent = "Your passwords do not match.";
+        message.className = "message error";
+        return;
+    }
+
+    message.textContent =
+        "Registration form validated! Account creation will be enabled when the secure backend is connected.";
+
+    message.className = "message success";
+});
+</script>
+
+</body>
+</html>
