@@ -24,8 +24,11 @@ class HybridRow(dict):
         return super().__getitem__(key)
 
 def hybrid_row(cursor):
-    names = [column.name for column in cursor.description]
-    return lambda values: HybridRow(zip(names, values))
+    def make_row(values):
+        names = [column.name for column in cursor.description]
+        return HybridRow(zip(names, values))
+    return make_row
+
 
 def convert_placeholders(sql):
     result = []
