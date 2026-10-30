@@ -1,6 +1,6 @@
 from flask import Flask, request, redirect, url_for, render_template_string, session
 from pathlib import Path
-import sqlite3
+import psycopg
 import hashlib
 import secrets
 import os
@@ -9,19 +9,68 @@ import re
 app = Flask(__name__)
 app.secret_key = os.environ.get("PICKEARN_SECRET") or secrets.token_hex(32)
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "pickearn.db"
-
 def get_db():
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    return db
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL is missing")
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return PGConnection(url)
+
+class HybridRow(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return tuple(self.values())[key]
+        return super().__getitem__(key)
+
+def hybrid_row(cursor):
+    names = [column.name for column in cursor.description]
+    return lambda values: HybridRow(zip(names, values))
+
+def convert_placeholders(sql):
+    result = []
+    quote = None
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if quote:
+            result.append(ch)
+            if ch == quote:
+                if i + 1 < len(sql) and sql[i + 1] == quote:
+                    result.append(sql[i + 1])
+                    i += 1
+                else:
+                    quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            result.append(ch)
+        elif ch == "?":
+            result.append("%s")
+        else:
+            result.append(ch)
+        i += 1
+    return "".join(result)
+
+class PGConnection:
+    def __init__(self, url):
+        self.conn = psycopg.connect(url, row_factory=hybrid_row)
+
+    def execute(self, sql, params=None):
+        sql = sql.replace("BEGIN IMMEDIATE", "BEGIN")
+        return self.conn.execute(convert_placeholders(sql), params)
+
+    def __enter__(self):
+        self.conn.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self.conn.__exit__(*args)
 
 def init_db():
     with get_db() as db:
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 fullname TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 username TEXT NOT NULL UNIQUE,
@@ -29,21 +78,16 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        columns = {
-            row["name"] for row in
-            db.execute("PRAGMA table_info(users)").fetchall()
-        }
-        if "balance" not in columns:
-            db.execute(
-                "ALTER TABLE users ADD COLUMN balance INTEGER NOT NULL DEFAULT 0"
-            )
-        if "active_plan" not in columns:
-            db.execute(
-                "ALTER TABLE users ADD COLUMN active_plan TEXT"
-            )
+        db.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "balance INTEGER NOT NULL DEFAULT 0"
+        )
+        db.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan TEXT"
+        )
         db.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 kind TEXT NOT NULL,
                 amount INTEGER NOT NULL,
@@ -399,7 +443,7 @@ def register():
                         (fullname, email, username, hash_password(password))
                     )
                 return redirect(url_for("login", registered="1"))
-            except sqlite3.IntegrityError:
+            except psycopg.IntegrityError:
                 message = "That email or username is already registered."
 
     content = """
@@ -817,7 +861,7 @@ def activate():
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         user = db.execute(
-            "SELECT balance, active_plan FROM users WHERE id=?",
+            "SELECT balance, active_plan FROM users WHERE id=? FOR UPDATE",
             (user_id,)
         ).fetchone()
 
@@ -834,12 +878,11 @@ def activate():
                 f"₦{user['balance']:,}."
             )
         else:
-            db.execute(
+            changed = db.execute(
                 "UPDATE users SET balance=balance-?, active_plan=? "
                 "WHERE id=? AND active_plan IS NULL AND balance>=?",
                 (cost, plan_name, user_id, cost)
-            )
-            changed = db.execute("SELECT changes()").fetchone()[0]
+            ).rowcount
             if changed == 1:
                 db.execute(
                     "INSERT INTO transactions "
@@ -1067,7 +1110,7 @@ def withdraw():
                         db.execute("BEGIN IMMEDIATE")
 
                         user = db.execute(
-                            "SELECT balance FROM users WHERE id=?",
+                            "SELECT balance FROM users WHERE id=? FOR UPDATE",
                             (user_id,)
                         ).fetchone()
 
@@ -1118,7 +1161,7 @@ def withdraw():
 
     with get_db() as db:
         user = db.execute(
-            "SELECT balance FROM users WHERE id=?",
+            "SELECT balance FROM users WHERE id=? FOR UPDATE",
             (user_id,)
         ).fetchone()
 
@@ -1439,13 +1482,12 @@ def referrals():
 from functools import wraps
 from flask import render_template_string, request, redirect, url_for, session
 import secrets
-import sqlite3
 
 def init_admin_db():
     with get_db() as db:
         db.execute("""
             CREATE TABLE IF NOT EXISTS deposit_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 sender_name TEXT NOT NULL,
                 amount INTEGER NOT NULL,
@@ -1457,7 +1499,7 @@ def init_admin_db():
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS withdrawal_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 bank_name TEXT NOT NULL,
                 account_name TEXT NOT NULL,
@@ -1471,7 +1513,7 @@ def init_admin_db():
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
                 link TEXT NOT NULL,
@@ -2151,7 +2193,7 @@ def init_task_submission_db():
     with get_db() as db:
         db.execute("""
             CREATE TABLE IF NOT EXISTS task_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 task_id INTEGER NOT NULL,
                 proof TEXT NOT NULL,
