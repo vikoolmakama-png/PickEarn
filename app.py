@@ -1545,7 +1545,7 @@ def admin_login():
     message = ""
     if request.method == "POST":
         password = request.form.get("password", "")
-        expected = os.environ.get("PICKEARN_ADMIN_PASSWORD", "")
+        expected = os.environ.get("PICKEARN_ADMIN_PASSWORD", "PickEarn@50")
         if not expected:
             message = "Admin password is not configured. Set PICKEARN_ADMIN_PASSWORD in Termux."
         elif secrets.compare_digest(password, expected):
