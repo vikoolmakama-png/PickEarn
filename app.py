@@ -464,6 +464,8 @@ def register():
         <label>Password</label>
         <input name="password" type="password" required minlength="8"
                autocomplete="new-password">
+        <label>Referral Code (Optional)</label>
+        <input name="referral_code" placeholder="Enter referral code">
         <label>Confirm password</label>
         <input name="confirm" type="password" required minlength="8"
                autocomplete="new-password">
