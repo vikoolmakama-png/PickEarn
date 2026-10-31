@@ -466,12 +466,8 @@ def register():
         else:
             try:
                 with get_db() as db:
-                    referrer = db.execute(
-                        "SELECT id FROM users WHERE lower(username)=lower(?)",
-                        (referral_code,)
-                    ).fetchone() if referral_code else None
-
-                    referrer_id = referrer["id"] if referrer else None
+                    # Temporarily disable referral lookup while testing registration.
+                    referrer_id = None
 
                     db.execute(
                         """INSERT INTO users
