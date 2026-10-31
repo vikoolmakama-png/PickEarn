@@ -534,6 +534,14 @@ def login():
             message = "Login is temporarily unavailable. Please try again."
         else:
             if user and verify_password(password, user["password"]):
+                # Upgrade legacy SHA-256 hashes to PBKDF2 after successful login.
+                if re.fullmatch(r"[0-9a-fA-F]{64}", user["password"] or ""):
+                    with get_db() as db:
+                        db.execute(
+                            "UPDATE users SET password=? WHERE id=?",
+                            (hash_password(password), user["id"])
+                        )
+
                 session.clear()
                 session["user_id"] = user["id"]
                 return redirect(url_for("dashboard"))
