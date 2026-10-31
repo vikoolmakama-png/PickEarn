@@ -74,10 +74,13 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
-                fullname TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
+                phone TEXT NOT NULL UNIQUE,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                referral_code TEXT NOT NULL UNIQUE,
+                referred_by BIGINT,
+                plan TEXT NOT NULL DEFAULT 'None',
+                balance BIGINT NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -86,7 +89,7 @@ def init_db():
             "balance INTEGER NOT NULL DEFAULT 0"
         )
         db.execute(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan TEXT"
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT"
         )
         db.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT"
@@ -442,23 +445,21 @@ def welcome():
     return page(content, "Welcome | PickEarn")
 
 
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     message = ""
     if request.method == "POST":
-        fullname = request.form.get("fullname", "").strip()
-        email = request.form.get("email", "").strip().lower()
+        phone = request.form.get("phone", "").strip()
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         confirm = request.form.get("confirm", "")
         referral_code = request.form.get("referral_code", "").strip()
 
-        if not fullname or not email or not username:
-            message = "Please complete every field."
-        elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-            message = "Enter a valid email address."
+        if not re.fullmatch(r"\+?[0-9]{10,15}", phone):
+            message = "Enter a valid phone number."
         elif not re.fullmatch(r"[A-Za-z0-9_]{3,30}", username):
-            message = "Username must be 3–30 letters, numbers or underscores."
+            message = "Username must be 3-30 letters, numbers or underscores."
         elif len(password) < 8:
             message = "Password must contain at least 8 characters."
         elif password != confirm:
@@ -466,52 +467,53 @@ def register():
         else:
             try:
                 with get_db() as db:
-                    # Temporarily disable referral lookup while testing registration.
                     referrer_id = None
+                    if referral_code:
+                        referrer = db.execute(
+                            "SELECT id FROM users WHERE referral_code=?",
+                            (referral_code,)
+                        ).fetchone()
+                        if not referrer:
+                            message = "Referral code not found."
+                        else:
+                            referrer_id = referrer["id"]
 
-                    db.execute(
-                        """INSERT INTO users
-                        (name,full_name,email,username,password,referred_by)
-                        VALUES (?,?,?,?,?,?)""",
-                        (fullname, fullname, email, username,
-                         hash_password(password), referrer_id)
-                    )
-                return redirect(url_for("login", registered="1"))
+                    if not message:
+                        db.execute(
+                            """INSERT INTO users
+                            (phone, username, password_hash, referral_code,
+                             referred_by, plan, balance)
+                            VALUES (?, ?, ?, ?, ?, 'None', 0)""",
+                            (phone, username, hash_password(password),
+                             secrets.token_hex(5).upper(), referrer_id)
+                        )
+                        return redirect(url_for("login", registered="1"))
             except psycopg.IntegrityError:
-                app.logger.exception("REGISTRATION_INTEGRITY_ERROR")
-                message = "That email or username is already registered."
+                message = "Phone number or username already registered."
             except Exception:
                 app.logger.exception("REGISTRATION_ERROR")
                 message = "Registration could not be completed. Please try again."
 
     content = """
-      <h2>Create your account</h2>
-      <p class="muted">Join PickEarn to get started.</p>
-      {% if message %}<div class="msg">{{ message }}</div>{% endif %}
-      <form method="post">
-        <label>Full name</label>
-        <input name="fullname" required maxlength="100" autocomplete="name">
-        <label>Email address</label>
-        <input name="email" type="email" required autocomplete="email">
-        <label>Username</label>
-        <input name="username" required minlength="3" maxlength="30"
-               pattern="[A-Za-z0-9_]+" autocomplete="username">
-        <label>Password</label>
-        <input name="password" type="password" required minlength="8"
-               autocomplete="new-password">
-        <label>Referral Code (Optional)</label>
-        <input name="referral_code" placeholder="Enter referral code">
-        <label>Confirm password</label>
-        <input name="confirm" type="password" required minlength="8"
-               autocomplete="new-password">
-        <button type="submit">CREATE ACCOUNT</button>
-      </form>
-      <p class="muted" style="margin-top:22px">
-        Already registered? <a class="link" href="/login">Log in</a>
-      </p>
-      <a class="btn secondary" href="/welcome">← Back to welcome</a>
+    <h2>Create your account</h2>
+    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+    <form method="post">
+      <label>Phone number</label>
+      <input name="phone" type="tel" required>
+      <label>Username</label>
+      <input name="username" required minlength="3" maxlength="30">
+      <label>Password</label>
+      <input name="password" type="password" required minlength="8">
+      <label>Confirm password</label>
+      <input name="confirm" type="password" required minlength="8">
+      <label>Referral code (optional)</label>
+      <input name="referral_code">
+      <button type="submit">CREATE ACCOUNT</button>
+    </form>
+    <p><a href="/login">Already registered? Log in</a></p>
     """
     return page(render_template_string(content, message=message), "Register | PickEarn")
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -521,56 +523,36 @@ def login():
     if request.method == "POST":
         identity = request.form.get("identity", "").strip()
         password = request.form.get("password", "")
-
         try:
             with get_db() as db:
                 user = db.execute(
-                    "SELECT * FROM users WHERE lower(email)=lower(?) OR lower(username)=lower(?)",
+                    """SELECT * FROM users
+                    WHERE phone=? OR lower(username)=lower(?)""",
                     (identity, identity)
                 ).fetchone()
-        except Exception:
-            app.logger.exception("LOGIN_ERROR")
-            user = None
-            message = "Login is temporarily unavailable. Please try again."
-        else:
-            if user and verify_password(password, user["password"]):
-                # Upgrade legacy SHA-256 hashes to PBKDF2 after successful login.
-                if re.fullmatch(r"[0-9a-fA-F]{64}", user["password"] or ""):
-                    with get_db() as db:
-                        db.execute(
-                            "UPDATE users SET password=? WHERE id=?",
-                            (hash_password(password), user["id"])
-                        )
-
+            if user and verify_password(password, user["password_hash"]):
                 session.clear()
                 session["user_id"] = user["id"]
                 return redirect(url_for("dashboard"))
-            message = "Incorrect username/email or password."
+            message = "Incorrect phone number/username or password."
+        except Exception:
+            app.logger.exception("LOGIN_ERROR")
+            message = "Login is temporarily unavailable."
 
     content = """
-      <h2>Welcome back</h2>
-      <p class="muted">Log in to your PickEarn account.</p>
-      {% if success %}
-        <div class="msg success">Account created! You can now log in.</div>
-      {% endif %}
-      {% if message %}<div class="msg">{{ message }}</div>{% endif %}
-      <form method="post">
-        <label>Username or email</label>
-        <input name="identity" required autocomplete="username">
-        <label>Password</label>
-        <input name="password" type="password" required
-               autocomplete="current-password">
-        <button type="submit">LOG IN →</button>
-      </form>
-      <p class="muted" style="margin-top:22px">
-        New here? <a class="link" href="/register">Create an account</a>
-      </p>
-      <a class="btn secondary" href="/welcome">← Back to welcome</a>
+    <h2>Welcome back</h2>
+    {% if success %}<div class="msg">Account created! Please log in.</div>{% endif %}
+    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+    <form method="post">
+      <label>Phone number or username</label>
+      <input name="identity" required>
+      <label>Password</label>
+      <input name="password" type="password" required>
+      <button type="submit">LOG IN</button>
+    </form>
+    <p><a href="/register">Create an account</a></p>
     """
-    return page(render_template_string(
-        content, message=message, success=success
-    ), "Login | PickEarn")
-
+    return page(render_template_string(content, message=message, success=success), "Login | PickEarn")
 
 @app.route("/dashboard")
 def dashboard():
@@ -578,7 +560,7 @@ def dashboard():
 
     with get_db() as db:
         user = db.execute(
-            "SELECT id, username, full_name, balance, active_plan "
+            "SELECT id, username, phone AS full_name, balance, NULLIF(plan, 'None') AS plan "
             "FROM users WHERE id=?",
             (user_id,)
         ).fetchone() if user_id else None
@@ -785,8 +767,8 @@ def dashboard():
         <div class="balance-note">
           Available wallet balance
         </div>
-        {% if active_plan %}
-          <div class="balance-note">Active plan: {{ active_plan }}</div>
+        {% if plan %}
+          <div class="balance-note">Active plan: {{ plan }}</div>
         {% endif %}
       </div>
 
@@ -819,7 +801,7 @@ def dashboard():
       </div>
 
       <h3 class="section-title">Your Tasks 🔒</h3>
-      {% if active_plan %}
+      {% if plan %}
         <a href="/tasks" class="plan-button"
            style="display:block;text-align:center;padding:20px;margin:15px 0;background:#29ff83;color:#06140b;border-radius:12px;font-weight:bold;text-decoration:none;">
           OPEN AVAILABLE TASKS
@@ -886,10 +868,11 @@ def dashboard():
             username=user["username"],
             fullname=user["full_name"],
             balance=user["balance"],
-            active_plan=user["active_plan"]
+            plan=user["plan"]
         ),
         "Dashboard | PickEarn"
     )
+
 
 
 
@@ -905,89 +888,79 @@ def activate():
         "plan1": ("PLAN 1", 1000),
         "plan3": ("PLAN 3", 3000)
     }
+
     selected = request.form.get("plan", "")
     if selected not in plans:
         return redirect(url_for("dashboard"))
 
     plan_name, cost = plans[selected]
 
-    with get_db() as db:
-        db.execute("BEGIN IMMEDIATE")
-        user = db.execute(
-            "SELECT balance, active_plan FROM users WHERE id=? FOR UPDATE",
-            (user_id,)
-        ).fetchone()
+    try:
+        with get_db() as db:
+            db.execute("BEGIN")
 
-        if not user:
-            session.clear()
-            return redirect(url_for("login"))
+            user = db.execute(
+                """SELECT balance, plan, referred_by
+                   FROM users WHERE id=? FOR UPDATE""",
+                (user_id,)
+            ).fetchone()
 
-        if user["active_plan"]:
-            message = "You already have an active plan."
-        elif user["balance"] < cost:
-            message = (
-                f"Insufficient balance. {plan_name} requires "
-                f"₦{cost:,}. Your available balance is "
-                f"₦{user['balance']:,}."
-            )
-        else:
-            changed = db.execute(
-                "UPDATE users SET balance=balance-?, active_plan=? "
-                "WHERE id=? AND active_plan IS NULL AND balance>=?",
-                (cost, plan_name, user_id, cost)
-            ).rowcount
-            if changed == 1:
-                db.execute(
-                    "INSERT INTO transactions "
-                    "(user_id, kind, amount, description) "
-                    "VALUES (?, 'plan_activation', ?, ?)",
-                    (user_id, -cost, plan_name + " activation")
+            if not user:
+                session.clear()
+                return redirect(url_for("login"))
+
+            if user["plan"] != "None":
+                message = "You already have an active plan."
+
+            elif user["balance"] < cost:
+                message = (
+                    f"Insufficient balance. {plan_name} requires "
+                    f"₦{cost:,}. Your available balance is "
+                    f"₦{user['balance']:,}."
                 )
-                referred = db.execute(
-                    "SELECT referred_by FROM users WHERE id=?",
-                    (user_id,)
-                ).fetchone()
 
-                if referred and referred["referred_by"]:
+            else:
+                changed = db.execute(
+                    """UPDATE users
+                       SET balance=balance-?, plan=?
+                       WHERE id=? AND plan='None' AND balance>=?""",
+                    (cost, plan_name, user_id, cost)
+                ).rowcount
+
+                if changed != 1:
+                    raise RuntimeError("Plan activation update failed.")
+
+                referrer_id = user["referred_by"]
+
+                if referrer_id:
                     reward = cost // 2
 
-                    credited = db.execute(
-                        """INSERT INTO referral_rewards
-                        (referrer_id, referred_user_id, plan_name, amount)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT (referred_user_id) DO NOTHING
-                        RETURNING id""",
-                        (referred["referred_by"], user_id, plan_name, reward)
-                    ).fetchone()
+                    db.execute(
+                        """INSERT INTO referral_commissions
+                           (referred_user_id, referrer_id, plan_name,
+                            activation_fee, commission_amount)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (user_id, referrer_id, plan_name, cost, reward)
+                    )
 
-                    if credited:
-                        db.execute(
-                            "UPDATE users SET balance=balance+? WHERE id=?",
-                            (reward, referred["referred_by"])
-                        )
-                        db.execute(
-                            """INSERT INTO transactions
-                            (user_id, kind, amount, description)
-                            VALUES (?, 'referral_reward', ?, ?)""",
-                            (referred["referred_by"], reward,
-                             "Referral reward for " + plan_name + " activation")
-                        )
+                    db.execute(
+                        "UPDATE users SET balance=balance+? WHERE id=?",
+                        (reward, referrer_id)
+                    )
 
                 message = f"{plan_name} activated successfully."
-            else:
-                message = "Activation could not be completed. Try again."
+
+    except Exception:
+        app.logger.exception("PLAN_ACTIVATION_ERROR")
+        message = "Plan activation failed. Please try again."
 
     content = """
       <h2>💎 Plan Activation</h2>
       <div class="notice">{{ message }}</div>
       <a class="btn" href="/dashboard">GO TO DASHBOARD</a>
     """
-    return page(
-        render_template_string(content, message=message),
-        "Plan Activation | PickEarn"
-    )
-
-
+    return page(render_template_string(content, message=message),
+                "Plan Activation | PickEarn")
 
 
 @app.route("/history")
@@ -1661,7 +1634,7 @@ def admin_dashboard():
     with get_db() as db:
         total_users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active_users = db.execute(
-            "SELECT COUNT(*) FROM users WHERE active_plan IS NOT NULL"
+            "SELECT COUNT(*) FROM users WHERE plan IS NOT NULL AND plan <> 'None'"
         ).fetchone()[0]
         pending_deposits = db.execute(
             "SELECT COUNT(*) FROM deposit_requests WHERE status='pending'"
@@ -1670,7 +1643,7 @@ def admin_dashboard():
             "SELECT COUNT(*) FROM withdrawal_requests WHERE status='pending'"
         ).fetchone()[0]
         users = db.execute("""
-            SELECT id, fullname, username, email, balance, active_plan
+            SELECT id, phone AS fullname, username, phone AS email, balance, plan
             FROM users ORDER BY id DESC LIMIT 50
         """).fetchall()
         deposits = db.execute("""
@@ -1813,7 +1786,7 @@ def admin_dashboard():
       <div class="admin-item">
         {{ u.fullname }} (@{{ u.username }})<br>
         {{ u.email }}<br>
-        Balance: ₦{{ u.balance }} | Plan: {{ u.active_plan or 'None' }}
+        Balance: ₦{{ u.balance }} | Plan: {{ u.plan or 'None' }}
       </div>
       {% endfor %}
     </div>
@@ -1957,7 +1930,7 @@ def user_tasks():
 
     with get_db() as db:
         user = db.execute(
-            "SELECT username, active_plan FROM users WHERE id=?",
+            "SELECT username, NULLIF(plan, 'None') AS plan FROM users WHERE id=?",
             (user_id,)
         ).fetchone()
 
@@ -1984,9 +1957,9 @@ def user_tasks():
             ORDER BY s.id DESC
         """, (user_id,)).fetchall()
 
-    if user["active_plan"] == "PLAN 1":
+    if user["plan"] == "PLAN 1":
         reward_column = "reward_plan1"
-    elif user["active_plan"] == "PLAN 3":
+    elif user["plan"] == "PLAN 3":
         reward_column = "reward_plan3"
     else:
         reward_column = None
@@ -2116,7 +2089,7 @@ def submit_task():
         db.execute("BEGIN IMMEDIATE")
 
         user = db.execute(
-            "SELECT active_plan FROM users WHERE id=?",
+            "SELECT NULLIF(plan, 'None') AS plan FROM users WHERE id=?",
             (user_id,)
         ).fetchone()
 
@@ -2124,12 +2097,12 @@ def submit_task():
             SELECT * FROM tasks WHERE id=? AND is_active=1
         """, (task_id,)).fetchone()
 
-        if not user or not user["active_plan"] or not task:
+        if not user or not user["plan"] or not task:
             return "This task is unavailable or your plan is inactive.", 400
 
-        if user["active_plan"] == "PLAN 1":
+        if user["plan"] == "PLAN 1":
             reward = task["reward_plan1"]
-        elif user["active_plan"] == "PLAN 3":
+        elif user["plan"] == "PLAN 3":
             reward = task["reward_plan3"]
         else:
             return "Your plan is not eligible for this task.", 400
