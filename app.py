@@ -482,7 +482,11 @@ def register():
                     )
                 return redirect(url_for("login", registered="1"))
             except psycopg.IntegrityError:
+                app.logger.exception("REGISTRATION_INTEGRITY_ERROR")
                 message = "That email or username is already registered."
+            except Exception:
+                app.logger.exception("REGISTRATION_ERROR")
+                message = "Registration could not be completed. Please try again."
 
     content = """
       <h2>Create your account</h2>
@@ -522,17 +526,22 @@ def login():
         identity = request.form.get("identity", "").strip()
         password = request.form.get("password", "")
 
-        with get_db() as db:
-            user = db.execute(
-                "SELECT * FROM users WHERE lower(email)=lower(?) OR lower(username)=lower(?)",
-                (identity, identity)
-            ).fetchone()
-
-        if user and verify_password(password, user["password"]):
-            session.clear()
-            session["user_id"] = user["id"]
-            return redirect(url_for("dashboard"))
-        message = "Incorrect username/email or password."
+        try:
+            with get_db() as db:
+                user = db.execute(
+                    "SELECT * FROM users WHERE lower(email)=lower(?) OR lower(username)=lower(?)",
+                    (identity, identity)
+                ).fetchone()
+        except Exception:
+            app.logger.exception("LOGIN_ERROR")
+            user = None
+            message = "Login is temporarily unavailable. Please try again."
+        else:
+            if user and verify_password(password, user["password"]):
+                session.clear()
+                session["user_id"] = user["id"]
+                return redirect(url_for("dashboard"))
+            message = "Incorrect username/email or password."
 
     content = """
       <h2>Welcome back</h2>
