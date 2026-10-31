@@ -121,12 +121,25 @@ def hash_password(password):
     return f"{salt}${hashed}"
 
 def verify_password(password, stored):
+    if not stored:
+        return False
+
     try:
-        salt, expected = stored.split("$", 1)
-        actual = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), salt.encode(), 260000
-        ).hex()
-        return secrets.compare_digest(actual, expected)
+        if "$" in stored:
+            salt, expected = stored.split("$", 1)
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt.encode(), 260000
+            ).hex()
+            return secrets.compare_digest(actual, expected)
+
+        # Support legacy 64-character SHA-256 password hashes.
+        legacy_hash = hashlib.sha256(password.encode()).hexdigest()
+        if re.fullmatch(r"[0-9a-fA-F]{64}", stored):
+            return secrets.compare_digest(
+                legacy_hash.lower(), stored.lower()
+            )
+
+        return False
     except (ValueError, TypeError):
         return False
 
