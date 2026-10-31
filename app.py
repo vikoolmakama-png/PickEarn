@@ -88,6 +88,19 @@ def init_db():
         db.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_plan TEXT"
         )
+        db.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT"
+        )
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS referral_rewards (
+                id BIGSERIAL PRIMARY KEY,
+                referrer_id BIGINT NOT NULL REFERENCES users(id),
+                referred_user_id BIGINT NOT NULL UNIQUE REFERENCES users(id),
+                plan_name TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id BIGSERIAL PRIMARY KEY,
@@ -425,6 +438,7 @@ def register():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         confirm = request.form.get("confirm", "")
+        referral_code = request.form.get("referral_code", "").strip()
 
         if not fullname or not email or not username:
             message = "Please complete every field."
@@ -439,11 +453,19 @@ def register():
         else:
             try:
                 with get_db() as db:
+                    referrer = db.execute(
+                        "SELECT id FROM users WHERE lower(username)=lower(?)",
+                        (referral_code,)
+                    ).fetchone() if referral_code else None
+
+                    referrer_id = referrer["id"] if referrer else None
+
                     db.execute(
                         """INSERT INTO users
-                        (fullname,email,username,password_hash)
-                        VALUES (?,?,?,?)""",
-                        (fullname, email, username, hash_password(password))
+                        (name,full_name,email,username,password,referred_by)
+                        VALUES (?,?,?,?,?,?)""",
+                        (fullname, fullname, email, username,
+                         hash_password(password), referrer_id)
                     )
                 return redirect(url_for("login", registered="1"))
             except psycopg.IntegrityError:
@@ -493,7 +515,7 @@ def login():
                 (identity, identity)
             ).fetchone()
 
-        if user and verify_password(password, user["password_hash"]):
+        if user and verify_password(password, user["password"]):
             session.clear()
             session["user_id"] = user["id"]
             return redirect(url_for("dashboard"))
@@ -530,7 +552,7 @@ def dashboard():
 
     with get_db() as db:
         user = db.execute(
-            "SELECT id, username, fullname, balance, active_plan "
+            "SELECT id, username, full_name, balance, active_plan "
             "FROM users WHERE id=?",
             (user_id,)
         ).fetchone() if user_id else None
@@ -836,7 +858,7 @@ def dashboard():
         render_template_string(
             content,
             username=user["username"],
-            fullname=user["fullname"],
+            fullname=user["full_name"],
             balance=user["balance"],
             active_plan=user["active_plan"]
         ),
@@ -895,6 +917,36 @@ def activate():
                     "VALUES (?, 'plan_activation', ?, ?)",
                     (user_id, -cost, plan_name + " activation")
                 )
+                referred = db.execute(
+                    "SELECT referred_by FROM users WHERE id=?",
+                    (user_id,)
+                ).fetchone()
+
+                if referred and referred["referred_by"]:
+                    reward = cost // 2
+
+                    credited = db.execute(
+                        """INSERT INTO referral_rewards
+                        (referrer_id, referred_user_id, plan_name, amount)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT (referred_user_id) DO NOTHING
+                        RETURNING id""",
+                        (referred["referred_by"], user_id, plan_name, reward)
+                    ).fetchone()
+
+                    if credited:
+                        db.execute(
+                            "UPDATE users SET balance=balance+? WHERE id=?",
+                            (reward, referred["referred_by"])
+                        )
+                        db.execute(
+                            """INSERT INTO transactions
+                            (user_id, kind, amount, description)
+                            VALUES (?, 'referral_reward', ?, ?)""",
+                            (referred["referred_by"], reward,
+                             "Referral reward for " + plan_name + " activation")
+                        )
+
                 message = f"{plan_name} activated successfully."
             else:
                 message = "Activation could not be completed. Try again."
@@ -1384,9 +1436,9 @@ def referrals():
       <div class="ref-hero">
         <div class="ref-icon">👥</div>
         <h2>Invite & Earn</h2>
-        <div class="reward">₦50</div>
+        <div class="reward">50%</div>
         <p class="ref-description">
-          Proposed referral reward for each eligible friend
+          Earn 50% of your friend’s activated plan cost as a referral reward.
           who registers through your link and activates a plan.
         </p>
       </div>
@@ -1424,7 +1476,7 @@ def referrals():
         <div class="step-number">3</div>
         <div>
           <h4>Your Friend Activates a Plan</h4>
-          <p>The proposed ₦50 reward applies only when the
+          <p>Your 50% referral reward is earned when your friend
           referral is verified and the friend activates an
           eligible plan, subject to the published terms.</p>
         </div>
@@ -1432,10 +1484,10 @@ def referrals():
 
       <div class="ref-notice">
         <strong>Referral programme status</strong><br>
-        This referral link is a demonstration. Registration
+        Your referral link tracks friends who register using your link.
         attribution, plan activation verification, referral
         records, and reward payments have not yet been
-        implemented. No ₦50 reward is currently credited
+        Rewards are credited to your wallet after successful eligible plan activation.
         or guaranteed.
       </div>
 
